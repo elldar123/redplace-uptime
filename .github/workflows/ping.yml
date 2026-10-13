@@ -1,0 +1,56 @@
+name: keep-alive
+
+# Redplace (Render free) 15 dəqiqə hərəkətsizlikdən sonra yatır və SQLite DB
+# sıfırlanır. Bu workflow hər 5 dəqiqədə sayta sorğu göndərib onu oyaq saxlayır.
+# Public repo → GitHub Actions dəqiqələri limitsizdir.
+
+on:
+  schedule:
+    - cron: '*/5 * * * *'
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+concurrency:
+  group: keep-alive
+  cancel-in-progress: false
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping site (3 dəfə — 15 dəq yuxunun qarşısını al)
+        run: |
+          for i in 1 2 3; do
+            code=$(curl -sS -m 30 -o /dev/null -w "%{http_code}" https://redplace.info/healthcheck.txt || echo "000")
+            echo "ping #$i -> $code  ($(date -u +%H:%M:%S))"
+            if [ "$i" -lt 3 ]; then sleep 150; fi
+          done
+
+      - name: Heartbeat (60-günlük cron söndürməsinin qarşısını al)
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          git clone --quiet --depth 1 "https://x-access-token:${GH_TOKEN}@github.com/elldar123/redplace-uptime.git" repo
+          cd repo
+          TODAY=$(date -u +%s)
+          if [ -f heartbeat.txt ]; then
+            LAST=$(date -u -r heartbeat.txt +%s)
+          else
+            LAST=0
+          fi
+          AGE=$(( (TODAY - LAST) / 86400 ))
+          echo "heartbeat yaşı: ${AGE} gün"
+          if [ "$AGE" -ge 20 ]; then
+            date -u > heartbeat.txt
+            git config user.email "actions@users.noreply.github.com"
+            git config user.name "keep-alive"
+            git add heartbeat.txt
+            git commit -m "heartbeat $(date -u +%F)" --quiet
+            git push --quiet
+            echo "heartbeat yeniləndi"
+          else
+            echo "hələ tezdir, keçildi"
+          fi
